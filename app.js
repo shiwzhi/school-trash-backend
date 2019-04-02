@@ -1,11 +1,45 @@
 var mongoUtil = require('./mongoUtil');
-
+var cookieParser = require('cookie-parser')
 const express = require('express')
 var bodyParser = require('body-parser')
 
 const app = express()
 app.use(bodyParser.json())
+app.use(cookieParser())
 const port = 3001
+
+const token_secret = "i'm shiweizhi"
+
+var cors = require('cors')
+app.use(cors({
+    credentials: true,
+    origin: 'http://localhost:3000'
+}))
+
+var jwt = require('jsonwebtoken');
+
+
+const loggedUser = {
+}
+
+
+
+function checkJWT(req, res, next) {
+    try {
+        var token = req.cookies.token
+        var decoded = jwt.verify(token, token_secret)
+        if (loggedUser[decoded.username] !== token) {
+            throw "token not equal"
+        }
+        next()
+    } catch (error) {
+        console.log(error)
+        res.status(401)
+        res.send("..")
+        return
+    }
+
+}
 
 
 mongoUtil.connectToServer(function (err) {
@@ -15,7 +49,7 @@ mongoUtil.connectToServer(function (err) {
     app.post("/regdevice", (req, res) => {
         var reg = req.body
         reg.regTime = Math.floor(Date.now() / 1000).toString()
-        db.collection('device').updateOne({ deviceid: reg.deviceid }, { $addToSet: { "regTime": reg.regTime, "devicetime": reg.devicetime }, $set: {'latestRegTime': reg.regTime} }, { upsert: true }).then((result) => {
+        db.collection('device').updateOne({ deviceid: reg.deviceid }, { $addToSet: { "regTime": reg.regTime, "devicetime": reg.devicetime }, $set: { 'latestRegTime': reg.regTime } }, { upsert: true }).then((result) => {
             console.log(result.result)
         })
         var deviceid = req.body.deviceid
@@ -30,15 +64,15 @@ mongoUtil.connectToServer(function (err) {
     })
 
     app.post("/uploaddata", (req, res) => {
-        
-        db.collection('device').updateOne({ deviceid: req.body.deviceid }, { $push: { "sensor_data": req.body.sensor_data }, $set:{'latestData': req.body.sensor_data} }, { upsert: true }).then((result) => {
+
+        db.collection('device').updateOne({ deviceid: req.body.deviceid }, { $push: { "sensor_data": req.body.sensor_data }, $set: { 'latestData': req.body.sensor_data } }, { upsert: true }).then((result) => {
             console.log(result.result)
             res.send("uploaded")
         })
     })
 
 
-    app.get('/devices', (req, res) => {
+    app.get('/devices', checkJWT ,(req, res) => {
         var db = mongoUtil.getDb()
         db.collection('device').find({}).toArray().then((result) => {
             res.json(result)
@@ -49,7 +83,7 @@ mongoUtil.connectToServer(function (err) {
         var db = mongoUtil.getDb()
         var deviceid = req.query.deviceid
         db.collection('device').find({ deviceid: deviceid }).toArray().then((result) => {
-            res.json(result)
+            res.json(result[0])
         })
     })
 
@@ -57,10 +91,39 @@ mongoUtil.connectToServer(function (err) {
         console.log("/updatedevice")
         var db = mongoUtil.getDb()
         var device = req.body.device
-        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "deviceinfo": device.deviceinfo, "devicecode": device.devicecode } }, { upsert: true }).then((result) => {
+        console.log(device)
+        db.collection('device').updateOne({ deviceid: device.deviceid }, {
+            $set: {
+                deviceinfo: device.deviceinfo,
+                cal_empty: device.cal_empty,
+                cal_full: device.cal_full
+            }
+        }, { upsert: true }).then((result) => {
             res.json(result)
         })
-        client.publish("/device/esp/" + device.deviceid + "/code", device.devicecode, { qos: 2, retain: true }, () => { console.log("code published") })
+    })
+
+    app.post('/deldevice', (req, res) => {
+        var db = mongoUtil.getDb()
+        var device = req.body.device
+        db.collection('device').deleteOne({ deviceid: device.deviceid }, (err, obj) => {
+            if (err) throw err;
+            console.log("1 document deleted");
+            res.json(obj)
+        })
+    })
+
+    app.post('/login', (req, res) => {
+        if (req.body.username === "shiweizhi") {
+            var token = jwt.sign({ username: 'shiweizhi' }, token_secret);
+            loggedUser[req.body.username] = token
+            console.log(loggedUser)
+            res.cookie('token', token, { httpOnly: true })
+            res.json(req.body.username)
+        }
+        else
+            res.status(401)
+            // res.json(req.body.username)
     })
 
 
@@ -72,10 +135,10 @@ mongoUtil.connectToServer(function (err) {
             result.map((device) => {
                 try {
                     var lapse = Math.floor(Date.now() / 1000) - parseInt(device.latestRegTime)
-                    if (lapse < 3600*3.5) {
-                        db.collection('device').updateOne({deviceid: device.deviceid}, {$set: {"devicestatus": "正常"}}, {upsert: true})
+                    if (lapse < 3600 * 3.5) {
+                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "正常" } }, { upsert: true })
                     } else {
-                        db.collection('device').updateOne({deviceid: device.deviceid}, {$set: {"devicestatus": "离线"}}, {upsert: true})
+                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "离线" } }, { upsert: true })
                     }
                 } catch (error) {
                     console.log("update status error")
