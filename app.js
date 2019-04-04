@@ -6,7 +6,7 @@ var bodyParser = require('body-parser')
 const app = express()
 app.use(bodyParser.json())
 app.use(cookieParser())
-const port = 3001
+const port = 3100
 
 const token_secret = "i'm shiweizhi"
 
@@ -21,7 +21,6 @@ var jwt = require('jsonwebtoken');
 
 const loggedUser = {
 }
-
 
 
 function checkJWT(req, res, next) {
@@ -124,6 +123,15 @@ mongoUtil.connectToServer(function (err) {
         else
             res.status(401)
             // res.json(req.body.username)
+    })
+
+    app.post('/logout', (req, res) => {
+        try {
+            res.cookie('token', "", {httpOnly: true})
+            res.json("logout")
+        } catch (error) {
+            console.log(error)
+        }
     })
 
 
