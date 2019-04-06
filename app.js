@@ -64,14 +64,26 @@ mongoUtil.connectToServer(function (err) {
 
     app.post("/uploaddata", (req, res) => {
 
-        db.collection('device').updateOne({ deviceid: req.body.deviceid }, { $push: { "sensor_data": req.body.sensor_data }, $set: { 'latestData': req.body.sensor_data } }, { upsert: true }).then((result) => {
-            console.log(result.result)
-            res.send("uploaded")
-        })
+        db.collection('device').updateOne({ deviceid: req.body.deviceid },
+            {
+                $push: { "sensor_data": req.body.sensor_data },
+                $set: { 'latestData': req.body.sensor_data }
+            },
+            { upsert: true }).then((result) => {
+                console.log(result.result)
+                res.send("uploaded")
+            })
     })
 
 
-    app.get('/devices', checkJWT ,(req, res) => {
+    app.get('/devices', checkJWT, (req, res) => {
+        if (req.query.searchText !== undefined) {
+            var db = mongoUtil.getDb()
+            db.collection('device').find({ 'deviceinfo': { $regex: ".*" + req.query.searchText + ".*" } }).toArray().then((result) => {
+                res.json(result)
+            })
+            return
+        }
         var db = mongoUtil.getDb()
         db.collection('device').find({}).toArray().then((result) => {
             res.json(result)
@@ -91,11 +103,12 @@ mongoUtil.connectToServer(function (err) {
         var db = mongoUtil.getDb()
         var device = req.body.device
         console.log(device)
+
         db.collection('device').updateOne({ deviceid: device.deviceid }, {
             $set: {
                 deviceinfo: device.deviceinfo,
                 cal_empty: device.cal_empty,
-                cal_full: device.cal_full
+                cal_full: device.cal_full,
             }
         }, { upsert: true }).then((result) => {
             res.json(result)
@@ -122,12 +135,12 @@ mongoUtil.connectToServer(function (err) {
         }
         else
             res.status(401)
-            // res.json(req.body.username)
+        // res.json(req.body.username)
     })
 
     app.post('/logout', (req, res) => {
         try {
-            res.cookie('token', "", {httpOnly: true})
+            res.cookie('token', "", { httpOnly: true })
             res.json("logout")
         } catch (error) {
             console.log(error)
