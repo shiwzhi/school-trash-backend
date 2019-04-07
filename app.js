@@ -13,7 +13,7 @@ const token_secret = "i'm shiweizhi"
 var cors = require('cors')
 app.use(cors({
     credentials: true,
-    origin: 'http://localhost:3000'
+    origin: ['http://localhost:3000']
 }))
 
 var jwt = require('jsonwebtoken');
@@ -135,7 +135,8 @@ mongoUtil.connectToServer(function (err) {
         }
         else
             res.status(401)
-        // res.json(req.body.username)
+            res.send("..")
+            // res.json(req.body.username)
     })
 
     app.post('/logout', (req, res) => {
