@@ -63,14 +63,15 @@ mongoUtil.connectToServer(function (err) {
     })
 
     app.post("/uploaddata", (req, res) => {
-        
+
         var reg = req.body
         reg.regTime = Math.floor(Date.now() / 1000).toString()
+        reg.sensor_data.datatime = reg.regTime
 
         db.collection('device').updateOne({ deviceid: req.body.deviceid },
             {
-                $push: { "sensor_data": req.body.sensor_data },
-                $set: { 'latestData': req.body.sensor_data, 'latestRegTime': reg.regTime },
+                $push: { "sensor_data": reg.sensor_data },
+                $set: { 'latestData': reg.sensor_data, 'latestRegTime': reg.regTime },
                 $addToSet: { "regTime": reg.regTime },
             },
             { upsert: true }).then((result) => {
@@ -141,8 +142,8 @@ mongoUtil.connectToServer(function (err) {
             res.status(401)
             res.send("..")
         }
-            
-        
+
+
         // res.json(req.body.username)
     })
 
