@@ -45,6 +45,25 @@ mongoUtil.connectToServer(function (err) {
 
     var db = mongoUtil.getDb()
 
+    function refreshStatus() {
+        db.collection('device').find({}).toArray().then((result) => {
+            result.map((device) => {
+                try {
+                    var lapse = Math.floor(Date.now() / 1000) - parseFloat(device.lastOnlineTime)
+                    if (lapse < (3600 * 3.5)) {
+                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "正常" } }, { upsert: true })
+                    } else {
+                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "离线" } }, { upsert: true })
+                    }
+                } catch (error) {
+                    console.log("update status error")
+                }
+            })
+        })
+    }
+
+    setInterval(refreshStatus, 10000);
+
     app.post("/regdevice", (req, res) => {
         var reg = req.body
         reg.regTime = Math.floor(Date.now() / 1000).toString()
@@ -63,20 +82,20 @@ mongoUtil.connectToServer(function (err) {
     })
 
     app.post("/uploaddata", (req, res) => {
-
-        var reg = req.body
-        reg.regTime = Math.floor(Date.now() / 1000).toString()
-        reg.sensor_data.datatime = reg.regTime
-
-        db.collection('device').updateOne({ deviceid: req.body.deviceid },
+        console.log(req.headers)
+        var data = req.body
+        console.log(data)
+        var time = Math.floor(Date.now() / 1000).toString()
+        data.sensor_data.time = time
+        db.collection('device').updateOne({ deviceid: data.deviceid },
             {
-                $push: { "sensor_data": reg.sensor_data },
-                $set: { 'latestData': reg.sensor_data, 'latestRegTime': reg.regTime },
-                $addToSet: { "regTime": reg.regTime },
+                $push: { "sensor_data": data.sensor_data },
+                $set: {"lastOnlineTime": time}
             },
             { upsert: true }).then((result) => {
                 console.log(result.result)
                 res.send("uploaded")
+                refreshStatus()
             })
     })
 
@@ -156,28 +175,12 @@ mongoUtil.connectToServer(function (err) {
         }
     })
 
+    app.get('/esp/update', (req, res) => {
+        console.log(req.headers)
+        res.status(304).send("no update")
+    })
 
 
-    // check if device regtime within sleep time 
-
-    function intervalFunc() {
-        db.collection('device').find({}).toArray().then((result) => {
-            result.map((device) => {
-                try {
-                    var lapse = Math.floor(Date.now() / 1000) - parseInt(device.latestRegTime)
-                    if (lapse < 3600 * 3.5) {
-                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "正常" } }, { upsert: true })
-                    } else {
-                        db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": "离线" } }, { upsert: true })
-                    }
-                } catch (error) {
-                    console.log("update status error")
-                }
-            })
-        })
-    }
-
-    setInterval(intervalFunc, 10000);
 
 });
 
