@@ -89,11 +89,11 @@ mongoUtil.connectToServer(function (err) {
                 try {
                     var lapse = Math.floor(Date.now() / 1000) - parseFloat(device.regTime)
                     var status = {
-                        
+
                     }
                     if (lapse < (3600 * 3.5)) {
                         status.onlineStatus = '正常'
-                        
+
                     } else {
                         status.onlineStatus = '离线'
                     }
@@ -268,7 +268,6 @@ var fs = require('fs');
 var https = require('https');
 var privateKey = fs.readFileSync('tls/key.pem', 'utf8');
 var certificate = fs.readFileSync('tls/cert.pem', 'utf8');
-var ca = fs.readFileSync('ca-tls/ca.crt', 'utf8');
 var credentials = { key: privateKey, cert: certificate };
 var httpsServer = https.createServer(credentials, app);
 
