@@ -2,16 +2,8 @@ var mongoUtil = require('./mongoUtil');
 var cookieParser = require('cookie-parser')
 const express = require('express')
 var bodyParser = require('body-parser')
-
-var mqtt = require('mqtt')
-var mqclient = mqtt.connect('mqtts://b.swz1994.com:8883', {
-    username: 'shiweizhi',
-    password: 'shiwzhi',
-    clientId: 'mqttjs_' + Math.random().toString(16).substr(2, 8),
-    clean: false,
-
-    rejectUnauthorized: false
-})
+var multer = require('multer')
+var upload = multer({ dest: 'uploads/' })
 
 const app = express()
 app.use(bodyParser.json())
@@ -45,7 +37,6 @@ function checkJWT(req, res, next) {
         res.send("..")
         return
     }
-
 }
 
 
@@ -53,95 +44,68 @@ mongoUtil.connectToServer(function (err) {
 
     var db = mongoUtil.getDb()
 
-    mqclient.subscribe('/lpssy/trashcan/#', { qos: 2 }, () => { console.log("[MQTT] subscribe success") })
+    app.post("/upload", (req, res) => {
+        console.log(req.body);
+        try {
+            var upload = req.body
+            var time = Math.floor(Date.now() / 1000).toString()
+            upload.time = time
 
-    mqclient.on('message', (topic, msg) => {
-        var currentTime = Math.floor(Date.now() / 1000)
-        if (topic === '/lpssy/trashcan/esp12/reg') {
-            console.log('[MQTT] Device reg id: ' + msg)
-            db.collection('device').updateOne({ deviceid: msg.toString() },
+            db.collection('device').updateOne({ deviceid: upload.deviceid },
                 {
-                    $set: {
-                        "regTime": currentTime
+                    $push: {
+                        "trash_data": { data: upload.data, time: upload.time }
                     }
-                }, { upsert: true }).then(result => {
-                    console.log("[Mongo] reg update")
-                    console.log(result.result)
+                },
+                { upsert: true }).then(result => {
+                    db.collection('device').findOne({ deviceid: upload.deviceid }, (err, result) => {
+                        if (result.sleep_h !== undefined && result.ota !== undefined) {
+                            res.json({
+                                sleep_h: result.sleep_h,
+                                ota: result.ota
+                            })
+                        } else {
+                            res.json({
+                                sleep_h: String(1.5),
+                                ota: false
+                            })
+                        }
+                    })
                 })
-        }
-        if (topic === '/lpssy/trashcan/esp12/upload') {
-            console.log('[MQTT] data upload')
-            var data = JSON.parse(msg.toString())
-            data.time = currentTime
-            db.collection('device').updateOne({ deviceid: data.deviceid },
-                {
-                    $push: { "trash_data": data },
-                }, { upsert: true }).then(result => {
-                    console.log("[Mongo] data upload")
-                    console.log(result.result)
-                })
+        } catch (error) {
+            console.log(error)
         }
     })
 
-    function refreshStatus() {
-        db.collection('device').find({}).toArray().then((result) => {
-            result.map((device) => {
-                try {
-                    var lapse = Math.floor(Date.now() / 1000) - parseFloat(device.regTime)
-                    var status = {
+    app.get("/ota", (req, res) => {
+        try {
+            var deviceid = req.headers["x-esp8266-version"]
+            db.collection('device').findOne({ deviceid: deviceid }, (err, result) => {
+                var file = result.otafile
+                res.sendFile(file, { root: __dirname })
 
-                    }
-                    if (lapse < (3600 * 3.5)) {
-                        status.onlineStatus = '正常'
+                db.collection('device').updateOne({ deviceid: deviceid },
+                    {
+                        $set: {
+                            ota: false
+                        }
+                    })
 
-                    } else {
-                        status.onlineStatus = '离线'
-                    }
-
-                    db.collection('device').updateOne({ deviceid: device.deviceid }, { $set: { "devicestatus": status.onlineStatus } }, { upsert: true })
-                } catch (error) {
-                    console.log("update status error")
-                }
             })
-        })
-    }
-    setInterval(refreshStatus, 5000);
+        } catch (error) {
+            console.log(error)
+            res.status(304).send("noupdate")
+        }
 
-    app.post("/regdevice", (req, res) => {
-        var reg = req.body
-        reg.regTime = Math.floor(Date.now() / 1000).toString()
-        db.collection('device').updateOne({ deviceid: reg.deviceid }, { $addToSet: { "regTime": reg.regTime, "devicetime": reg.devicetime }, $set: { 'latestRegTime': reg.regTime } }, { upsert: true }).then((result) => {
-            console.log(result.result)
-        })
-        var deviceid = req.body.deviceid
-        db.collection('device').find({ deviceid: deviceid }).toArray().then((result) => {
-            try {
-                res.send(result[0].devicecode)
-            } catch (error) {
-                console.log("can't get device code")
-                res.send("print('cant get device code')")
-            }
-        })
     })
 
-
-
-
-    app.get('/devices', checkJWT, (req, res) => {
-        if (req.query.searchText !== undefined) {
-            var db = mongoUtil.getDb()
-            db.collection('device').find({ 'deviceinfo': { $regex: ".*" + req.query.searchText + ".*" } }).toArray().then((result) => {
-                res.json(result)
-            })
-            return
-        }
-        var db = mongoUtil.getDb()
+    app.get('/api/device/all', (req, res) => {
         db.collection('device').find({}).toArray().then((result) => {
             res.json(result)
         })
     })
 
-    app.get('/device', (req, res) => {
+    app.get('/api/device/info', (req, res) => {
         var db = mongoUtil.getDb()
         var deviceid = req.query.deviceid
         db.collection('device').find({ deviceid: deviceid }).toArray().then((result) => {
@@ -149,25 +113,41 @@ mongoUtil.connectToServer(function (err) {
         })
     })
 
-    app.post('/updatedevice', (req, res) => {
+    app.post('/api/device/update', (req, res) => {
         console.log("/updatedevice")
-        var db = mongoUtil.getDb()
         var device = req.body.device
-        console.log(device)
 
         db.collection('device').updateOne({ deviceid: device.deviceid }, {
             $set: {
                 deviceinfo: device.deviceinfo,
                 cal_empty: device.cal_empty,
                 cal_full: device.cal_full,
+                sleep_h: device.sleep_h,
+                ota: device.ota
             }
         }, { upsert: true }).then((result) => {
             res.json(result)
         })
     })
 
-    app.post('/deldevice', (req, res) => {
-        var db = mongoUtil.getDb()
+    app.post("/api/device/uploadOTAfile", upload.single("file"), (req, res) => {
+
+        try {
+            db.collection('device').updateOne({ deviceid: req.body.deviceid }, {
+                $set: {
+                    otafile: req.file.path
+                }
+            }, { upsert: true }).then((result) => {
+            })
+        } catch (error) {
+
+        }
+
+
+        res.send("ok")
+    })
+
+    app.post('/api/device/delete', (req, res) => {
         var device = req.body.device
         db.collection('device').deleteOne({ deviceid: device.deviceid }, (err, obj) => {
             if (err) throw err;
@@ -176,7 +156,7 @@ mongoUtil.connectToServer(function (err) {
         })
     })
 
-    app.post('/login', (req, res) => {
+    app.post('/api/user/login', (req, res) => {
         if (req.body.username === "shiweizhi") {
             var token = jwt.sign({ username: 'shiweizhi' }, token_secret);
             loggedUser[req.body.username] = token
@@ -188,12 +168,9 @@ mongoUtil.connectToServer(function (err) {
             res.status(401)
             res.send("..")
         }
-
-
-        // res.json(req.body.username)
     })
 
-    app.post('/logout', (req, res) => {
+    app.post('/api/user/logout', (req, res) => {
         try {
             res.cookie('token', "", { httpOnly: true })
             res.json("logout")
@@ -202,65 +179,88 @@ mongoUtil.connectToServer(function (err) {
         }
     })
 
-    app.get('/otacode', (req, res) => {
-        var db = mongoUtil.getDb()
+    app.post('/api/user/add', (req, res) => {
+        console.log(req.body)
+        var user = req.body.username
+        var pass = req.body.password
+        var time = Math.floor(Date.now() / 1000).toString()
         try {
-            var time = Math.floor(Date.now() / 1000).toString()
-            var deviceid = req.query.deviceid
-            var filepath = 'devices/' + deviceid + '/ota.lua'
-            if (fs.existsSync(filepath)) {
-
-                db.collection('device').updateOne({ deviceid: deviceid },
-                    {
-                        $set: {
-                            "lastOnlineTime": time,
-                            "otaStatus": "Normal"
+            db.collection('users').findOne({username: user}, (err, result) => {
+                if (err) {
+                    res.status(500).send("error")
+                }
+                if (result !== null) {
+                    res.json({
+                        status: "error",
+                        msg: "用户存在"
+                    })
+                } else {
+                    db.collection('users').insertOne({
+                        username: user,
+                        password: pass,
+                        regTime: time
+                    }, (err, result)=>{
+                        if (err) {
+                            res.status(500).send("error")
                         }
-                    },
-                    { upsert: true })
-
-                res.sendFile('devices/' + deviceid + '/ota.lua', { root: __dirname })
-            } else {
-                throw error
-            }
+                      if (result.result.ok) {
+                          res.json({
+                              status: "success",
+                              msg: "添加用户成功"
+                          })
+                      } else {
+                          res.json({
+                              status: "error",
+                              msg: "添加用户失败"
+                          })
+                      }
+                    })
+                }
+            })
         } catch (error) {
-            console.log("catch error")
-            db.collection('device').updateOne({ deviceid: deviceid },
-                {
-                    $set: {
-                        "lastOnlineTime": time,
-                        "otaStatus": "can't get ota file",
-                        "devicestatus": "设备未配置OTA代码"
-                    }
-                },
-                { upsert: true })
-            res.sendFile('devices/generic/ota.lua', { root: __dirname })
         }
-
     })
 
+    app.post('/api/user/del', (req, res)=> {
+        var user = req.body.username
+        db.collection('users').deleteOne({ username: user }, (err, obj) => {
+            if (err) throw err;
+            console.log("1 document deleted");
+            res.json(obj)
+        })
+    })
 
-    app.post("/uploaddata", (req, res) => {
-        var data = req.body
-        var time = Math.floor(Date.now() / 1000).toString()
-        data.sensor_data.time = time
-        db.collection('device').updateOne({ deviceid: data.deviceid },
-            {
-                $push: { "sensor_data": data.sensor_data },
-                $set: {
-                    "lastData": data.sensor_data
+    app.get('/api/user/all', (req, res)=>{
+        try {
+            db.collection('users').find({}, (err, result)=>{
+                if (err) {
+                    res.status(500)
                 }
-            },
-            { upsert: true }).then((result) => {
-                console.log(result.result)
-                res.send("uploaded")
-                refreshStatus()
+                result.toArray().then((array)=> {
+                    console.log(array)
+                    res.json(array)
+                })
+                
             })
+        } catch (error) {
+            console.log(error)
+        }
+    })
+
+    app.post('/api/user/info', (req, res)=>{
+        var username = req.body.user
+        db.collection('users').findOne({username}, (err, result)=>{
+            if (err) {
+                res.status(500)
+            }
+            res.json(result)
+        })
     })
 
 });
 
 app.get('/', (req, res) => res.send('Hello World!'))
+
 
 app.listen(port, () => console.log(`Example app listening on port ${port}!`))
 
