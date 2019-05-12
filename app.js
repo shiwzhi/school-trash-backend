@@ -5,6 +5,9 @@ var bodyParser = require('body-parser')
 var multer = require('multer')
 var upload = multer({ dest: 'uploads/' })
 
+const bcrypt = require('bcrypt');
+const saltRounds = 10;
+
 const app = express()
 app.use(bodyParser.json())
 app.use(cookieParser())
@@ -45,30 +48,26 @@ mongoUtil.connectToServer(function (err) {
     var db = mongoUtil.getDb()
 
     app.post("/upload", (req, res) => {
-        console.log(req.body);
-        try {
-            var upload = req.body
-            var time = Math.floor(Date.now() / 1000).toString()
-            upload.time = time
+        console.log(req.headers)
+        var chipid = req.headers['esp-chipid']
+        var data = req.headers['hcsr-04']
 
-            db.collection('device').updateOne({ deviceid: upload.deviceid },
+        var time = Math.floor(Date.now() / 1000).toString()
+        try {
+            db.collection('device').updateOne({ deviceid: chipid },
                 {
                     $push: {
-                        "trash_data": { data: upload.data, time: upload.time }
+                        "trash_data": { data: data, time: time }
                     }
                 },
                 { upsert: true }).then(result => {
-                    db.collection('device').findOne({ deviceid: upload.deviceid }, (err, result) => {
-                        if (result.sleep_h !== undefined && result.ota !== undefined) {
-                            res.json({
-                                sleep_h: result.sleep_h,
-                                ota: result.ota
-                            })
-                        } else {
-                            res.json({
-                                sleep_h: String(1.5),
-                                ota: false
-                            })
+                    db.collection('device').findOne({ deviceid: chipid }, (err, result) => {
+                        var sleep_time = result.sleep_h
+                        if (sleep_time !== undefined) {
+                            res.send("SLEEP" + sleep_time);
+                        }
+                        else {
+                            res.send("SLEEP180")
                         }
                     })
                 })
@@ -77,27 +76,6 @@ mongoUtil.connectToServer(function (err) {
         }
     })
 
-    app.get("/ota", (req, res) => {
-        try {
-            var deviceid = req.headers["x-esp8266-version"]
-            db.collection('device').findOne({ deviceid: deviceid }, (err, result) => {
-                var file = result.otafile
-                res.sendFile(file, { root: __dirname })
-
-                db.collection('device').updateOne({ deviceid: deviceid },
-                    {
-                        $set: {
-                            ota: false
-                        }
-                    })
-
-            })
-        } catch (error) {
-            console.log(error)
-            res.status(304).send("noupdate")
-        }
-
-    })
 
     app.get('/api/device/all', (req, res) => {
         db.collection('device').find({}).toArray().then((result) => {
@@ -105,7 +83,8 @@ mongoUtil.connectToServer(function (err) {
         })
     })
 
-    app.get('/api/device/info', (req, res) => {
+    app.get('/api/device/info', checkJWT, (req, res) => {
+        console.log("check user info")
         var db = mongoUtil.getDb()
         var deviceid = req.query.deviceid
         db.collection('device').find({ deviceid: deviceid }).toArray().then((result) => {
@@ -126,26 +105,14 @@ mongoUtil.connectToServer(function (err) {
                 ota: device.ota
             }
         }, { upsert: true }).then((result) => {
-            res.json(result)
+            if (result.result.ok === 1) {
+                res.send("设备信息更新成功")
+            } else {
+                res.send("设备信息更新失败")
+            }
         })
     })
 
-    app.post("/api/device/uploadOTAfile", upload.single("file"), (req, res) => {
-
-        try {
-            db.collection('device').updateOne({ deviceid: req.body.deviceid }, {
-                $set: {
-                    otafile: req.file.path
-                }
-            }, { upsert: true }).then((result) => {
-            })
-        } catch (error) {
-
-        }
-
-
-        res.send("ok")
-    })
 
     app.post('/api/device/delete', (req, res) => {
         var device = req.body.device
@@ -157,17 +124,28 @@ mongoUtil.connectToServer(function (err) {
     })
 
     app.post('/api/user/login', (req, res) => {
-        if (req.body.username === "shiweizhi") {
-            var token = jwt.sign({ username: 'shiweizhi' }, token_secret);
-            loggedUser[req.body.username] = token
-            console.log(loggedUser)
-            res.cookie('token', token, { httpOnly: true })
-            res.json(req.body.username)
-        }
-        else {
-            res.status(401)
-            res.send("..")
-        }
+        var user = req.body.username
+        var pass = req.body.password
+
+        db.collection('users').findOne({ username: user }, (err, result) => {
+            if (result !== null) {
+                bcrypt.compare(pass, result.password, function (err, result) {
+                    if (result) {
+                        console.log("bcrypt correct")
+                        var token = jwt.sign({ username: user }, token_secret);
+                        loggedUser[user] = token
+                        res.cookie('token', token, { httpOnly: true })
+                        res.send("登录成功")
+                    } else {
+                        res.status(401)
+                        res.send("cridet incorrect")
+                    }
+                });
+            } else {
+                res.status(401)
+                res.send("用户名或密码错误")
+            }
+        })
     })
 
     app.post('/api/user/logout', (req, res) => {
@@ -179,13 +157,34 @@ mongoUtil.connectToServer(function (err) {
         }
     })
 
+    app.post('/api/user/update', (req, res) => {
+        var user = req.body.username
+        var pass = req.body.password
+        bcrypt.hash(pass, saltRounds, function (err, hash) {
+            db.collection('users').updateOne({ username: user },
+                {
+                    $set: {
+                        password: hash
+                    }
+                }).then(result => {
+                    console.log(result)
+                    if (result.result.ok === 1) {
+                        res.send("用户信息更新成功")
+                    } else {
+                        res.send("用户信息更新失败")
+                    }
+                })
+        });
+
+
+    })
+
     app.post('/api/user/add', (req, res) => {
-        console.log(req.body)
         var user = req.body.username
         var pass = req.body.password
         var time = Math.floor(Date.now() / 1000).toString()
         try {
-            db.collection('users').findOne({username: user}, (err, result) => {
+            db.collection('users').findOne({ username: user }, (err, result) => {
                 if (err) {
                     res.status(500).send("error")
                 }
@@ -195,33 +194,36 @@ mongoUtil.connectToServer(function (err) {
                         msg: "用户存在"
                     })
                 } else {
-                    db.collection('users').insertOne({
-                        username: user,
-                        password: pass,
-                        regTime: time
-                    }, (err, result)=>{
-                        if (err) {
-                            res.status(500).send("error")
-                        }
-                      if (result.result.ok) {
-                          res.json({
-                              status: "success",
-                              msg: "添加用户成功"
-                          })
-                      } else {
-                          res.json({
-                              status: "error",
-                              msg: "添加用户失败"
-                          })
-                      }
-                    })
+                    bcrypt.hash(pass, saltRounds, function (err, hash) {
+                        db.collection('users').insertOne({
+                            username: user,
+                            password: hash,
+                            regTime: time
+                        }, (err, result) => {
+                            if (err) {
+                                res.status(500).send("error")
+                            }
+                            if (result.result.ok) {
+                                res.json({
+                                    status: "success",
+                                    msg: "添加用户成功"
+                                })
+                            } else {
+                                res.json({
+                                    status: "error",
+                                    msg: "添加用户失败"
+                                })
+                            }
+                        })
+                    });
+
                 }
             })
         } catch (error) {
         }
     })
 
-    app.post('/api/user/del', (req, res)=> {
+    app.post('/api/user/del', (req, res) => {
         var user = req.body.username
         db.collection('users').deleteOne({ username: user }, (err, obj) => {
             if (err) throw err;
@@ -230,31 +232,81 @@ mongoUtil.connectToServer(function (err) {
         })
     })
 
-    app.get('/api/user/all', (req, res)=>{
+    app.get('/api/user/all', (req, res) => {
         try {
-            db.collection('users').find({}, (err, result)=>{
+            db.collection('users').find({}, (err, result) => {
                 if (err) {
                     res.status(500)
                 }
-                result.toArray().then((array)=> {
-                    console.log(array)
+                result.toArray().then((array) => {
                     res.json(array)
                 })
-                
+
             })
         } catch (error) {
             console.log(error)
         }
     })
 
-    app.post('/api/user/info', (req, res)=>{
-        var username = req.body.user
-        db.collection('users').findOne({username}, (err, result)=>{
+    app.post('/api/user/info', checkJWT, (req, res) => {
+        console.log("userinfo")
+        var token = req.cookies.token
+        var decoded = jwt.verify(token, token_secret)
+
+        var username = decoded.username
+        db.collection('users').findOne({ username }, (err, result) => {
             if (err) {
                 res.status(500)
             }
+            console.log(result)
             res.json(result)
         })
+    })
+
+    app.get('/api/user/devices', checkJWT, (req, res) => {
+        var token = req.cookies.token
+        var decoded = jwt.verify(token, token_secret)
+        var username = decoded.username
+
+        db.collection('users').findOne({ username }, (err, result) => {
+            if (err) {
+                res.status(500)
+            }
+            var devices = result.devices
+            console.log(devices)
+            var detail_devices = []
+            devices.forEach(async (device)=>{
+                 var device = await db.collection('device').findOne({deviceid: device})
+                 detail_devices.push(device)
+            })
+            console.log(detail_devices)
+
+            res.send('.')
+        })
+
+    })
+
+
+    app.post('/api/user/save_device', checkJWT, (req, res) => {
+        var token = req.cookies.token
+        var decoded = jwt.verify(token, token_secret)
+        var username = decoded.username
+        if (req.body.action === 'star') {
+            db.collection('users').updateOne({ username: username }, {
+                $addToSet: {
+                    devices: req.body.deviceId
+                }
+            })
+            res.send(".")
+        }
+        if (req.body.action === 'unstar') {
+            db.collection('users').updateOne({ username: username }, {
+                $pull: {
+                    devices: req.body.deviceId
+                }
+            })
+            res.send("..")
+        }
     })
 
 });
